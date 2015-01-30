@@ -1,0 +1,48 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use IO::Socket;
+
+my (
+	$ip_address,
+	$port,
+	$proto,
+	$timeout
+);
+
+GetOptions (
+	'ip_address=s' => \$ip_address, 
+	'port=s' => \$port, 
+	'proto=s' => \$proto, 
+	'timeout=s' => \$timeout
+);
+
+if (
+	$ip_address eq '' or 
+	$port eq '' or
+	$proto eq '' or
+	$timeout eq ''
+) {
+	exit 1;
+}
+else {
+	my $socket = IO::Socket::INET->new(
+        					PeerAddr        => $ip_address,
+                                                PeerPort        => $port,
+                                                Proto           => $proto,
+                                                Type            => SOCK_STREAM,
+						Timeout 	=> $timeout
+        );
+
+	if ($socket) {
+		print STDOUT "5\n";
+		print STDERR "connection ok\n";
+		close $socket;
+	}
+	else {
+		print STDOUT "1\n";
+		print STDERR "connection timeout\n";
+	}
+}
+

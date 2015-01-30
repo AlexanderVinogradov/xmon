@@ -1,0 +1,376 @@
+#!/usr/bin/perl
+
+use strict;
+use DBI;
+use POSIX qw(strftime);
+use IO::Socket;
+
+open(CF, "</var/xmon/install_dir")
+        or die "Can't open /var/xmon/install_dir\n";
+my $install_dir=<CF>;
+chomp($install_dir);
+close(CF);
+my %cnf = ();
+open(C, "<$install_dir/etc/xmon.conf")
+        or die "Cant open config $install_dir/etc/xmon.conf\n";
+while(<C>) {
+        chomp;
+        if ($_ !~ /^#/ and $_ ne '') {
+                my @cp = split(" = ", $_);
+                $cnf{$cp[0]} = $cp[1];
+        }
+}
+close(C);
+
+if ($ARGV[0] eq 'start-service') {
+	my $err_log = '/dev/null';
+
+	if ($ARGV[1] ne '') {
+		$err_log = $ARGV[1];	
+	}
+
+	my $pcount = 0;
+        opendir(PD, "/proc")
+        	or die "Can't open /proc\n";
+        while(my $proc = readdir(PD)) {
+        	if (-f "/proc/$proc/cmdline") {
+                	open(P, "</proc/$proc/cmdline")
+                        	or die "Can't open /proc/$proc/cmdline\n";
+                        my $cmdline=<P>;
+                        chomp($cmdline);
+                        if ($cmdline =~ /^xmonsd$/) {
+				print "$proc allready running\n";
+                                $pcount++;
+                        }
+                        close(P);
+                }
+        }
+        closedir(PD);
+        if ($pcount < 1) {
+        	system("$install_dir/bin/xmonsd $err_log 1>/dev/null 2>>$err_log &");
+        }
+}
+elsif ($ARGV[0] eq 'stop-service') {
+        opendir(PD, "/proc")
+                or die "Can't open /proc\n";
+        while(my $proc = readdir(PD)) {
+                if (-f "/proc/$proc/cmdline") {
+                        open(P, "</proc/$proc/cmdline")
+                                or die "Can't open /proc/$proc/cmdline\n";
+                        my $cmdline=<P>;
+                        chomp($cmdline);
+                        if ($cmdline =~ /^xmonsd$/) {
+				kill 15, $proc;
+                                print "$proc stoped\n";
+                        }
+                        close(P);
+                }
+        }
+        closedir(PD);
+}
+elsif ($ARGV[0] eq 'create-database') {
+	my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+	opendir(D, "$install_dir/share/sql")
+        	or die "Can't open $install_dir/share/sql\n";
+        while (my $ld = readdir(D)) {
+        	chomp($ld);
+                if ($ld !~ /^\./ and $ld !~ /^\.\./ and -f "$install_dir/share/sql/$ld" and $ld =~ /\.sql$/) {
+			open(F, "$install_dir/share/sql/$ld")
+				or die "Can't open $install_dir/share/sql/$ld\n";
+			my @query = <F>;
+			close(F);		
+	
+			$ld =~ s/\.sql//;
+			print "Creating $ld\n";
+
+			$dbh->do("@query");
+                }
+        }
+        closedir(D);
+
+	$dbh->disconnect();
+}
+elsif ($ARGV[0] eq 'view-checks') {
+	my @checks;
+	my $ext_q = '';
+        my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+	if ($ARGV[1] =~ /[0-9]/) {
+		$ext_q = "AND check_conf.id=$ARGV[1]";
+	} 	
+
+	my $sth = $dbh->prepare("       
+					SELECT check_conf.id, check_conf.check_script_name, check_conf.check_interval, check_conf.check_script_timeout, check_conf.action_script_name, check_conf.action_script_timeout, check_conf.check_managed, checks_descriptions.description, checks_status.current_severity, checks_status.current_data, checks_status.current_check_time, checks_status.current_action_answer, checks_status.current_action_time
+						FROM check_conf, checks_descriptions, checks_status
+							WHERE checks_descriptions.id = check_conf.id 
+        						AND checks_status.id = check_conf.id $ext_q
+	");
+        $sth->execute();
+        while (my $ref = $sth->fetchrow_hashref()) {
+		push(@checks, "$ref->{'id'}\:\:\:\:\:$ref->{'check_script_name'}\:\:\:\:\:$ref->{'check_interval'}\:\:\:\:\:$ref->{'check_script_timeout'}\:\:\:\:\:$ref->{'action_script_name'}\:\:\:\:\:$ref->{'action_script_timeout'}\:\:\:\:\:$ref->{'check_managed'}\:\:\:\:\:$ref->{'description'}\:\:\:\:\:$ref->{'current_severity'}\:\:\:\:\:$ref->{'current_data'}\:\:\:\:\:$ref->{'current_check_time'}\:\:\:\:\:$ref->{'current_action_answer'}\:\:\:\:\:$ref->{'current_action_time'}")
+        }
+        $sth->finish();
+
+	foreach (@checks) {
+		my @check_param = split("\:\:\:\:\:", $_);
+
+		print "UNIQUE CHECK ID: $check_param[0]\n";
+                print "CHECK SCRIPT NAME: $check_param[1]\n";
+                print "INTERVAL: $check_param[2]\n";
+                print "CHECK SCRIPT TIMEOUT: $check_param[3]\n";
+                print "ACTION SCRIPT NAME: $check_param[4]\n";
+                print "ACTION SCRIPT TIMEOUT: $check_param[5]\n";
+                print "CHECK MANAGEMENT STATUS: $check_param[6]\n";
+                print "CHECK DESCRIPTION: $check_param[7]\n";
+		print "CURRENT SEVERITY: $check_param[8]\n";
+		print "CURRENT DATA: $check_param[9]\n";
+		my $cct = localtime($check_param[10]);
+		print "CURRENT CHECK TIME: $cct\n";
+		print "CURRENT ACTION ANSWER: $check_param[11]\n";
+		my $cat = localtime($check_param[12]);
+		print "CURRENT ACTION TIME: $cat\n";
+		print "PARAMETERS:\n";
+
+		my $sth = $dbh->prepare("
+						SELECT field_name, field_value, type
+							FROM checks_params
+								WHERE id=$check_param[0]
+									ORDER BY type
+		");
+		$sth->execute();
+		while (my $ref = $sth->fetchrow_hashref()) {
+			print "\'$ref->{type}\' : \'$ref->{field_name}\' \'$ref->{field_value}\'\n";
+		}
+
+		print "\n";
+	}
+
+        $dbh->disconnect();
+}
+elsif ($ARGV[0] eq 'add-check') {
+        if ($ARGV[1] eq '' or $ARGV[2] eq '' or $ARGV[3] eq '' or $ARGV[4] eq '' or $ARGV[5] eq '' or $ARGV[6] eq '' or $ARGV[7] eq '') {
+                print "Wrong params ...\n";
+        }
+        else {
+                my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+		my ($real_number, $real_id);
+
+		while() {
+			my $count = 0;
+			my $test_number = int(rand(100000));
+	
+			my $sth = $dbh->prepare("       
+                					SELECT check_name 
+                        	                        	FROM check_conf
+		        ");
+        		$sth->execute();
+	        	while (my $ref = $sth->fetchrow_hashref()) {
+	        		if ($ref->{'check_name'} eq $test_number) {
+					$count++;
+				}
+			}
+	        	$sth->finish();
+
+			if ($count < 1) {
+				$real_number = $test_number;
+				last;
+			}
+		}
+
+		$dbh->do("
+				INSERT INTO check_conf 
+					(check_name,check_type,check_script_name,check_interval,check_script_timeout,action_script_name,action_script_timeout,check_managed)
+						VALUES(\'$real_number\',\'xmon\',\'$ARGV[1]\',\'$ARGV[2]\',\'$ARGV[3]\',\'$ARGV[4]\',\'$ARGV[5]\',\'$ARGV[6]\')
+		");		
+
+		my $sth = $dbh->prepare("       
+						SELECT id
+                                                	FROM check_conf 
+								WHERE check_name=\'$real_number\'
+                ");
+		$sth->execute();
+		while (my $ref = $sth->fetchrow_hashref()) {
+			$real_id = $ref->{'id'};	
+		}
+
+		$dbh->do("
+				INSERT INTO checks_descriptions
+					(id, description)
+						VALUES(\'$real_id\',\'$ARGV[7]\')
+		");
+
+                $dbh->disconnect();
+        }
+}
+elsif ($ARGV[0] eq 'delete-check') {
+        if ($ARGV[1] eq '') {
+                print "Wrong params ...\n";
+        }
+        else {
+                my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+                $dbh->do("
+                                DELETE FROM check_conf 
+                                        WHERE id=$ARGV[1]
+                ");
+
+                $dbh->disconnect();
+        }
+}
+elsif ($ARGV[0] eq 'find-check-by-param') {
+	if ($ARGV[1] eq '') {
+                print "Wrong params ...\n";
+        }
+        else {
+		my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+		my $sth = $dbh->prepare("       
+                                                SELECT id
+                                                        FROM check_conf 
+								WHERE id in (
+									SELECT id 
+										FROM checks_params
+											WHERE field_value like \'\%$ARGV[1]\%\'
+								)
+                ");
+                $sth->execute();
+                while (my $ref = $sth->fetchrow_hashref()) {
+                        print "ID: $ref->{'id'}\n";
+                }
+
+		$dbh->disconnect();
+	}
+}
+elsif ($ARGV[0] eq 'find-check-by-descr') {
+        if ($ARGV[1] eq '') {
+                print "Wrong params ...\n";
+        }
+        else {
+                my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+                my $sth = $dbh->prepare("       
+                                                SELECT id
+                                                        FROM check_conf 
+                                                                WHERE id in (
+                                                                        SELECT id 
+                                                                                FROM checks_descriptions
+                                                                                        WHERE description like \'\%$ARGV[1]\%\'
+                                                                )
+                ");
+                $sth->execute();
+                while (my $ref = $sth->fetchrow_hashref()) {
+                        print "ID: $ref->{'id'}\n";
+                }
+
+                $dbh->disconnect();
+        }
+}
+elsif ($ARGV[0] eq 'add-check-param') {
+        if ($ARGV[1] eq '' or $ARGV[2] eq '' or $ARGV[3] eq '' or ($ARGV[4] ne 'check' and $ARGV[4] ne 'action')) {
+                print "Wrong params ...\n";
+        }
+        else {
+                my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+		my $id_count = 0;
+		my $sth = $dbh->prepare("       
+                                                SELECT COUNT(1) 
+                                                        FROM checks_params
+                                                                WHERE id=\'$ARGV[1]\' 
+								AND field_name=\'$ARGV[2]\' 
+								AND type=\'$ARGV[4]\'
+                ");
+                $sth->execute();
+                while (my $ref = $sth->fetchrow_arrayref()) {
+                        $id_count = $ref->[0];
+                }
+                $sth->finish();
+
+		if ($id_count < 1) {
+	                $dbh->do("
+        	                        INSERT INTO checks_params
+						(id,field_name,field_value,type)
+							values(\'$ARGV[1]\',\'$ARGV[2]\',\'$ARGV[3]\',\'$ARGV[4]\') 
+	                ");
+		}
+		else {
+			print "Param $ARGV[4] $ARGV[2] allready exists for check with id $ARGV[1]\n";
+		}
+
+                $dbh->disconnect();
+        }
+}
+elsif ($ARGV[0] eq 'delete-check-param') {
+        if ($ARGV[1] eq '' or $ARGV[2] eq '' or ($ARGV[3] ne 'check' and $ARGV[3] ne 'action')) {
+                print "Wrong params ...\n";
+        }
+        else {
+                my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+                $dbh->do("
+                                DELETE FROM checks_params
+                                                WHERE id=\'$ARGV[1]\' 
+						AND field_name=\'$ARGV[2]\'
+						AND type=\'$ARGV[3]\'
+                ");
+
+                $dbh->disconnect();
+        }
+}
+elsif ($ARGV[0] eq 'disable-check') {
+        if ($ARGV[1] eq '') {
+                print "Wrong params ...\n";
+        }
+        else {
+                my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+                $dbh->do("
+                                UPDATE check_conf
+					SET check_managed=0
+                                                WHERE id=\'$ARGV[1]\'
+                ");
+
+                $dbh->disconnect();
+        }
+}
+elsif ($ARGV[0] eq 'enable-check') {
+        if ($ARGV[1] eq '') {
+                print "Wrong params ...\n";
+        }
+        else {
+                my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+                $dbh->do("
+                                UPDATE check_conf
+                                        SET check_managed=1
+                                                WHERE id=\'$ARGV[1]\'
+                ");
+
+                $dbh->disconnect();
+        }
+}
+else {
+	print "
+		Administrative actions:
+
+		start-service			Starting monitoring service. Params: debug log name as second argument
+		stop-service			Stoping monitoring service.
+		create-database			Create all tables for work.
+                
+		Configuration actions:
+
+		view-checks			View checks. Params: check_id or blank
+		add-check			Add check. Params: check_script_name check_interval check_script_timeout action_script_name action_script_timeout check_managed check_description
+		delete-check			Delete check. Params: check_id
+		add-check-param			Add check param. Params: check_id check_param_name check_param_value type
+		delete-check-param		Delete check param. Params: check_id check_param_name type
+		disable-check                   Disable check. Params: check_id
+		enable-check                    Enable check. Params: check_id
+		find-check-by-param		Find check. Params: check_param_value
+		find-check-by-descr		Find check. Params: check_description
+	\n";
+}
+
+ 

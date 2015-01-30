@@ -1,0 +1,239 @@
+#!/usr/bin/perl
+
+$0 = "xmonad";
+
+use strict;
+use Parallel::ForkManager;
+use DBI;
+use IPC::Cmd qw( run );
+
+#init configuration
+open(CF, "</var/xmon/install_dir")
+	or die "Can't open /var/xmon/install_dir\n";
+my $install_dir=<CF>;
+chomp($install_dir);
+close(CF);
+my %cnf = ();
+open(C, "<$install_dir/etc/xmon.conf")
+        or die "Cant open config $install_dir/etc/xmon.conf\n";
+while(<C>) {
+        chomp;
+        if ($_ !~ /^#/ and $_ ne '') {
+                my @cp = split(" = ", $_);
+                $cnf{$cp[0]} = $cp[1];
+        }
+}
+close(C);
+
+#open logfile
+open(L, ">>$install_dir/log/xmonad.log")
+	or die "Cant open $install_dir/log/xmonad.log\n";
+
+#set forks number
+my $pm = new Parallel::ForkManager($cnf{xmonad_max_parallel_procs});
+
+my $t = localtime;
+print L "$t Initializing.\n";
+
+#connect to database for taking checks
+my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+#select all checks
+my @checks = ();
+my $sth = $dbh->prepare("	
+				SELECT id,action_script_name,action_script_timeout,check_interval
+					FROM check_conf
+						WHERE check_managed=1
+");
+$sth->execute();
+while (my $ref = $sth->fetchrow_hashref()) {
+	push(@checks, "$ref->{id}\:\:\:\:\:$ref->{action_script_name}\:\:\:\:\:$ref->{action_script_timeout}\:\:\:\:\:$ref->{check_interval}");
+}
+$sth->finish();
+
+#select all params
+my @tasks_parameters = ();
+foreach (@checks) {
+        chomp;
+
+        my @task_string = split("\:\:\:\:\:", $_);
+
+        my $sth = $dbh->prepare("       
+                                        SELECT id, field_name, field_value 
+                                                FROM checks_params
+                                                        WHERE id=\'$task_string[0]\'
+								AND type=\'action\'
+        ");
+        $sth->execute();
+        while (my $ref = $sth->fetchrow_hashref()) {
+                push(@tasks_parameters, "$ref->{id}\:\:\:\:\:$ref->{field_name}\:\:\:\:\:$ref->{field_value}");
+        }
+        $sth->finish();
+}
+
+#deleting all invalid data from status table
+$dbh->do("
+                DELETE FROM checks_status
+                        WHERE id NOT IN (
+                                                SELECT id 
+                                                        FROM check_conf
+                                        )
+");
+
+#deleting all invalid data from descriptions table
+$dbh->do("
+                DELETE FROM checks_descriptions
+                        WHERE id NOT IN (
+                                                SELECT id 
+                                                        FROM check_conf
+                                        )
+");
+
+#lets start
+while () {
+	foreach (@checks) {
+		chomp;
+
+		#split this row to the params
+		my @task_param = split("\:\:\:\:\:", $_);
+
+		#read severity, data and last action time 
+		my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+                my $severity = '';
+                my $data = '';
+		my $last_action_time = 0;
+
+		my $sth = $dbh->prepare("       
+                                                SELECT current_severity, current_data, current_action_time
+                                                        FROM checks_status 
+								WHERE id=$task_param[0]
+                ");
+                $sth->execute();
+                while (my $ref = $sth->fetchrow_hashref()) {
+                        $severity = $ref->{'current_severity'};
+			$data = $ref->{'current_data'};
+			$last_action_time = $ref->{'current_action_time'};
+                }
+                $sth->finish();
+
+                $dbh->disconnect();
+
+		#taking script params for current task
+                my $params = '';
+                foreach (@tasks_parameters) {
+                        chomp;
+
+                        my @tasks_parameters_string = split("\:\:\:\:\:", $_);
+
+                        if ($tasks_parameters_string[0] eq $task_param[0]) {
+                                $params = $params . "\-\-$tasks_parameters_string[1]\=\'$tasks_parameters_string[2]\' ";
+                        }
+                }
+                $params =~ s/ $//;
+
+		#check can we run this task and have we script
+		my $now = time;
+		if (-f "$cnf{xmonad_action_scripts_dir}/$task_param[1]" and $data ne '' and $severity ne '' and $last_action_time + $task_param[3] < $now) {
+			#fork it
+			my $pid = $pm->start and next;
+	                $0 = "xmonad: $task_param[0]";
+
+			my $t = localtime;
+			print L "$t We are ready to action check with ID: $task_param[0] EXECUTION COMMAND: $cnf{xmonad_action_scripts_dir}/$task_param[1] $params \-\-severity\=\'$severity\' \-\-data\=\'$data\' TIMEOUT: $task_param[2]\n";
+
+			#take current time
+                        my $current_action_time = time;
+
+			#if true and script is here run it
+			my $cmd = "$cnf{xmonad_action_scripts_dir}/$task_param[1] $params \-\-severity\=\'$severity\' \-\-data\=\'$data\'";
+			my(
+			        $success,
+			        $error_message,
+			        $full_buf,
+			        $stdout_buf,
+			        $stderr_buf
+			) = run(
+			        command => $cmd,
+			        timeout => $task_param[2],
+			        verbose => 0
+			);			
+
+			my $out = '';
+			foreach (@$stdout_buf) {
+				s/\n/ /g;
+				$out = $out . $_;
+			}
+			my $err = '';
+			foreach (@$stderr_buf) {
+                                s/\n/ /g;
+				$err = $err . $_;
+                        }
+			
+			#after all update statuses and log tables
+                        my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+
+                        my $row_count = '';
+                        my $sth = $dbh->prepare("       
+                                                        SELECT id
+                                                                FROM checks_status
+									WHERE id=$task_param[0]
+                        ");
+                        $sth->execute();
+                        while (my $ref = $sth->fetchrow_arrayref()) {
+                                $row_count = $ref->[0];
+                        }
+                        $sth->finish();
+
+                        if ($row_count eq '') {
+				if ($err eq '') {
+	                                $dbh->do("
+        	                                        INSERT INTO checks_status (id, current_action_answer, current_action_time)
+                	                                        VALUES(\'$task_param[0]\',\'$out $err\',\'$current_action_time\')
+                        	        ");
+				}
+				else {
+					$dbh->do("
+                                                        INSERT INTO checks_status (id, current_action_answer, current_action_time)
+                                                                VALUES(\'$task_param[0]\',\'$out $err\',\'$last_action_time\')
+                                        ");
+				}
+                        }
+                        else {
+				if ($err eq '') {
+					$dbh->do("
+                                                        UPDATE checks_status
+                                                                SET current_action_answer=\'$out $err\', current_action_time=\'$current_action_time\'
+									WHERE id=$task_param[0]
+                                        ");
+				}
+				else {
+	                                $dbh->do("
+        	                                        UPDATE checks_status
+                	                                        SET current_action_answer=\'$out $err\', current_action_time=\'$last_action_time\'
+									WHERE id=$task_param[0]
+                        	        ");
+				}
+                        }
+
+                        $dbh->do("
+                        		INSERT INTO checks_log (id, data, time, type)
+                                                VALUES(\'$task_param[0]\',\'$out $err\',\'$current_action_time\', \'action\')
+			");
+
+                        $dbh->disconnect();
+
+			my $t = localtime;
+			print L "$t Check $task_param[0] was actioned by COMMAND: $cnf{xmonad_action_scripts_dir}/$task_param[1] $params \-\-severity\=\'$severity\' \-\-data\=\'$data\' and give results ANSWER: $out $err TIME: $current_action_time\n";
+
+			$pm->finish;
+		}
+	}
+
+	$pm->wait_all_children;
+
+	sleep $cnf{xmonad_sleep_interval};	
+}
+
+close(L);
+

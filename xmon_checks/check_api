@@ -1,0 +1,91 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use DBI;
+
+my (
+        $check_id,
+        $curl_tmt,
+	$proxy_host,
+	$proxy_port,
+	$link,
+	$db_host,
+	$db_port,
+	$db_name,
+	$db_user,
+	$db_pass
+);
+
+GetOptions (
+        'check_id=s' => \$check_id,
+	'curl_tmt=s' => \$curl_tmt,
+        'link=s' => \$link,
+	'proxy_host=s' => \$proxy_host,
+	'proxy_port=s' => \$proxy_port,
+	'db_host=s' => \$db_host,
+	'db_port=s' => \$db_port,
+	'db_name=s' => \$db_name,
+	'db_user=s' => \$db_user,
+	'db_pass=s' => \$db_pass
+);
+
+if (
+        $check_id eq '' or
+        $curl_tmt eq '' or 
+	$proxy_host eq '' or
+	$proxy_port eq '' or
+	$link eq '' or
+	$db_host eq '' or
+	$db_port eq '' or
+	$db_name eq '' or
+	$db_user eq '' or
+	$db_pass eq ''
+) {
+        exit 1;
+}
+
+#take current ip from cluster check
+my $dbh = DBI->connect("DBI:mysql:database=$db_name;host=$db_host;port=$db_port", $db_user, $db_pass);
+my $current_data = '';
+my $sth = $dbh->prepare("       
+				SELECT current_data
+					FROM checks_status 
+						WHERE id=$check_id
+");
+$sth->execute();
+while (my $ref = $sth->fetchrow_hashref()) {
+	$current_data = $ref->{'current_data'};
+}
+$sth->finish();
+$dbh->disconnect();
+
+#check api
+my @out = `curl --connect-timeout $curl_tmt -k -x $proxy_host:$proxy_port "$link" 2>/dev/null`;
+
+my $test_string = '';
+foreach (@out) {
+	if (/RESPONSE STATUS_CODE/) {
+		chomp;
+		$test_string = $_;
+		last;
+	}
+}
+
+my @test_string_param = split("=", $test_string);
+$test_string_param[1] =~ s/"//g;
+$test_string_param[1] =~ s/>//g;
+
+if ($test_string eq '') {
+	$test_string = 'timeout';
+}
+
+if ($test_string_param[1] ne '0') {
+	print STDOUT "1\n";
+	print STDERR "Answer code: $test_string_param[1] $current_data\n";
+}
+else {
+	print STDOUT "5\n";
+        print STDERR "Answer code: $test_string_param[1] $current_data\n";
+}
+

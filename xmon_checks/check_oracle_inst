@@ -1,0 +1,41 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+
+my (
+	$usr,
+	$pass,
+	$ip,
+	$inst
+);
+
+GetOptions (
+	'pass=s' => \$pass,
+	'usr=s' => \$usr,
+	'ip=s' => \$ip,
+	'inst=s' => \$inst
+);
+
+if (
+        $usr eq '' or
+	$pass eq '' or
+	$ip eq '' or
+	$inst eq ''
+) {
+        exit 1;
+}
+
+my $ts = `export LD_LIBRARY_PATH="/root/instantclient/instantclient_11_2" && /root/instantclient/instantclient_11_2/sqlplus $usr/$pass@//$ip/$inst <<EOF
+select sysdate from dual;
+EOF | grep -E 'SYSDATE'`;
+
+if ($ts eq '') {
+	print STDOUT "1\n";
+	print STDERR "OracleDB instance $inst FAILED for SYSDATE query\n";
+}
+else {
+	print STDOUT "5\n";
+        print STDERR "OracleDB instance $inst OK for SYSDATE query\n";
+}
+

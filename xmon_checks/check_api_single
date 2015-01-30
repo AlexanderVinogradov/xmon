@@ -1,0 +1,39 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+
+my (
+        $curl_tmt,
+	$link
+);
+
+GetOptions (
+	'curl_tmt=s' => \$curl_tmt,
+        'link=s' => \$link
+);
+
+if (
+        $curl_tmt eq '' or 
+	$link eq ''
+) {
+        exit 1;
+}
+
+#check api
+my @out = `curl --connect-timeout $curl_tmt -k -i "$link" 2>/dev/null`;
+my @fl_p = split(" ", $out[0]);
+
+if ($fl_p[1] eq '') {
+	$fl_p[1] = 'timeout';
+}
+
+if ($fl_p[1] ne '200') {
+	print STDOUT "1\n";
+	print STDERR "Answer code: $fl_p[1]\n";
+}
+else {
+	print STDOUT "5\n";
+        print STDERR "Answer code: $fl_p[1]\n";
+}
+

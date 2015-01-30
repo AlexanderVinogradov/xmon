@@ -1,0 +1,45 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+
+my (
+	$ip_address,
+	$port,
+	$proto,
+	$timeout
+);
+
+GetOptions (
+	'ip_address=s' => \$ip_address, 
+	'port=s' => \$port, 
+	'proto=s' => \$proto, 
+	'timeout=s' => \$timeout
+);
+
+if (
+	$ip_address eq '' or 
+	$port eq '' or
+	$proto eq '' or
+	$timeout eq ''
+) {
+	exit 1;
+}
+else {
+	my $u_opt = '';
+	if ($proto eq 'udp') {
+		$u_opt = '-u';
+	}
+
+	my $out = `nc $u_opt -z -w $timeout $ip_address $port`;
+
+	if ($out =~ /succeeded/) {
+		print STDOUT "6\n";
+		print STDERR "connection ok\n";
+	}
+	else {
+		print STDOUT "1\n";
+		print STDERR "connection timeout\n";
+	}
+}
+

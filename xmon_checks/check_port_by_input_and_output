@@ -1,0 +1,61 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use IO::Socket;
+
+my (
+	$ip_address,
+	$port,
+	$proto,
+	$timeout,
+	$string,
+	@out_arr
+);
+
+GetOptions (
+	'ip_address=s' => \$ip_address, 
+	'port=s' => \$port, 
+	'proto=s' => \$proto, 
+	'timeout=s' => \$timeout,
+	'string=s' => \$string
+);
+
+if (
+	$ip_address eq '' or 
+	$port eq '' or
+	$proto eq '' or
+	$timeout eq '' or
+	$string eq ''
+) {
+	exit 1;
+}
+else {
+	my $socket = IO::Socket::INET->new(
+        					PeerAddr        => $ip_address,
+                                                PeerPort        => $port,
+                                                Proto           => $proto,
+                                                Type            => SOCK_STREAM,
+						Timeout 	=> $timeout
+        );
+
+	print $socket "$string\n\n";
+
+	while (<$socket>) {
+		if ($_ ne '') {
+			push(@out_arr);
+			last;
+		}
+	}
+
+	if (!@out_arr) {
+		print STDOUT "6\n";
+		print STDERR "service working\n";
+		close $socket;
+	}
+	else {
+		print STDOUT "1\n";
+		print STDERR "service not working\n";
+	}
+}
+

@@ -1,0 +1,166 @@
+#!/usr/bin/perl
+
+use strict;
+use lib '/opt/ionix_api_lib';
+use InCharge::session;
+use Getopt::Long;
+
+my (
+	$domain_manager, 
+	$sm_class_name, 
+	$broker, 
+	$sm_instance_name, 
+	$sm_event_name, 
+	$severity, 
+	$data, 
+	$username, 
+	$password,
+	$sm_topology_system
+);
+
+GetOptions(
+		"domain_manager=s"   => \$domain_manager,
+	        "sm_class_name=s"   => \$sm_class_name,
+        	"broker=s"   => \$broker,
+        	"sm_event_name=s"   => \$sm_event_name,
+	        "severity=i"   => \$severity,
+        	"data=s"   => \$data,
+		"username=s" => \$username,
+		"password=s" => \$password,
+);
+
+if (
+	$domain_manager eq '' or
+	$sm_class_name eq '' or
+	$broker eq '' or
+	$sm_event_name eq '' or
+	$severity eq '' or
+	$data eq '' or
+	$username eq '' or
+	$password eq '' 
+) {
+	print STDERR "Wrong params\n";
+}
+else {
+	my @data_s = split(" ", $data);
+	my @data_p = split(",", $data_s[-1]);
+
+	$sm_topology_system = $data_p[0];
+	$sm_instance_name = $data_p[0];
+
+	my $session = InCharge::session->new(
+						broker=>"$broker",
+						domain=>"$domain_manager",
+						username=>"$username",
+						password=>"$password",
+						traceServer => 1,
+						locale=>"en_US"
+	);
+
+	foreach (@data_p) {
+		if ($_ ne $sm_topology_system) {
+			my $icsNotificationFactory = $session->object($session->getInstances("ICS_NotificationFactory"));
+
+                	my $eventObj = $icsNotificationFactory->findNotification($sm_class_name, $_, $sm_event_name);
+
+	                if ($eventObj ne '') {
+        	                $eventObj = $session->object($eventObj);
+	
+        	                if (!$eventObj->isNull()) {
+                	                if ($eventObj->{EventState} eq "ACTIVE") {
+                        	                my @arrClear = ("xmon", "xmon", "Event has closed by xmon \"$data\"");
+                                	        $session->invoke($eventObj, "clear", @arrClear);
+                                        	$eventObj->changed(time);
+	                                }
+        	                }
+                	}
+		}
+	}
+
+	if ($severity eq '1' or $severity eq '2' or $severity eq '3' or $severity eq '5') {
+		my $element;
+                my $elemObj = $session->object($sm_class_name, $sm_instance_name);
+
+		if (!$elemObj->isNull()) {
+			$element = $elemObj;
+		}
+
+		my $icsNotificationFactory = $session->object($session->getInstances("ICS_NotificationFactory"));
+	
+		my $eventObj = $icsNotificationFactory->makeNotification($sm_class_name, $sm_instance_name, $sm_event_name);
+
+		$eventObj = $session->object($eventObj);
+
+		if (!$eventObj->isNull()) {
+	                $eventObj->{EventText} = $data;
+        	        $eventObj->{Severity} = $severity;
+                	$eventObj->{ClearOnAcknowledge} = 1;
+	                $eventObj->{EventType} = "DURABLE";
+        	        $eventObj->{OccurredOn} = $sm_topology_system;
+	                $eventObj->{SourceEventType} = "EVENT";
+
+        	        my @arr = ("xmon", "xmon", "Event has created by xmon", 0, 0);
+                	$session->invoke($eventObj, "notify", @arr);
+	                $eventObj->changed(time);
+        	}
+	
+		print STDOUT "Event has been created\n";	
+	}
+	elsif ($severity eq '6') {
+		my $icsNotificationFactory = $session->object($session->getInstances("ICS_NotificationFactory"));
+		
+		my $eventObj = $icsNotificationFactory->findNotification($sm_class_name, $sm_instance_name, $sm_event_name);
+
+		if ($eventObj ne '') {
+			$eventObj = $session->object($eventObj);
+
+			if (!$eventObj->isNull()) {
+				if ($eventObj->{EventState} eq "ACTIVE") {
+					my @arrClear = ("xmon", "xmon", "Event has closed by xmon \"$data\"");
+					$session->invoke($eventObj, "clear", @arrClear);
+					$eventObj->changed(time);
+				}
+			}
+		}
+		
+		print STDOUT "Event has been cleared\n";
+	}
+	elsif ($severity eq '10') {
+		my $element;
+                my $elemObj = $session->object($sm_class_name, $sm_instance_name);
+
+                if (!$elemObj->isNull()) {
+                        $element = $elemObj;
+                }
+
+                my $icsNotificationFactory = $session->object($session->getInstances("ICS_NotificationFactory"));
+
+                my $eventObj = $icsNotificationFactory->makeNotification($sm_class_name, $sm_instance_name, $sm_event_name);
+
+                $eventObj = $session->object($eventObj);
+
+                if (!$eventObj->isNull()) {
+                        $eventObj->{EventText} = $data;
+                        $eventObj->{Severity} = 4;
+                        $eventObj->{ClearOnAcknowledge} = 1;
+                        $eventObj->{EventType} = "DURABLE";
+                        $eventObj->{OccurredOn} = $element;
+                        $eventObj->{SourceEventType} = "EVENT";
+
+                        my @arr = ("xmon", "xmon", "Event has created by xmon", 0, 0);
+                        $session->invoke($eventObj, "notify", @arr);
+                        $eventObj->changed(time);
+                }
+
+                print STDOUT "Broken script event has been created\n";
+	}
+	else {
+		print STDERR "Your severity code is incorrect\n";
+	}
+}
+
+
+
+
+
+

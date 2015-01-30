@@ -1,0 +1,99 @@
+#!/usr/bin/perl
+#####################################################################
+#this script making instances of two classes (parent and child)     # 
+#in DM topo, connects it by given relationship from child to parent # 
+#####################################################################
+
+use strict;
+use lib '/opt/ionix_api_lib';
+use InCharge::session;
+use Getopt::Long;
+
+my (
+	$domain_manager, 
+	$sm_child_class_name, 
+	$broker, 
+	$sm_child_instance_name, 
+	$sm_parent_instance_name, 
+	$sm_parent_class_name,
+	$sm_relationship, 
+	$username, 
+	$password
+);
+
+GetOptions(
+		"broker=s"   => \$broker,
+		"domain_manager=s"   => \$domain_manager,
+		"username=s" => \$username,
+		"password=s" => \$password,
+	        "sm_parent_class_name=s"   => \$sm_parent_class_name,
+	        "sm_parent_instance_name=s"   => \$sm_parent_instance_name,
+		"sm_child_class_name=s"   => \$sm_child_class_name,
+		"sm_child_instance_name=s"   => \$sm_child_instance_name,
+		"sm_relationship=s" => \$sm_relationship,
+);
+
+if (
+	$broker eq '' or
+	$domain_manager eq '' or
+	$username eq '' or
+	$password eq '' or
+	$sm_parent_class_name eq '' or
+	$sm_parent_instance_name eq '' or
+	$sm_child_class_name eq '' or
+	$sm_child_instance_name eq '' or
+	$sm_relationship eq ''
+) {
+	print "FAILED Wrong params\n";
+}
+else {
+	#connect to DM
+	my $session = InCharge::session->new(
+						broker=>"$broker",
+						domain=>"$domain_manager",
+						username=>"$username",
+						password=>"$password",
+						traceServer => 1,
+						locale=>"en_US"
+	);
+	
+	#check have we instances of this clesses
+	my $pi_count = 0;
+	my @parent_instances = $session->getClassInstances($sm_parent_class_name);
+	my @child_instances = $session->getClassInstances($sm_child_class_name);
+        foreach (@parent_instances) {
+                chomp;
+                if ($_ eq $sm_parent_instance_name) {
+                        $pi_count++
+                }
+        }
+	if ($pi_count < 1) {
+		$session->createInstance("$sm_parent_class_name\:\:$sm_parent_instance_name");
+	}
+	
+        my $ci_count = 0;
+	my @child_instances = $session->getClassInstances($sm_child_class_name);
+	foreach (@child_instances) {
+		chomp;
+		if ($_ eq $sm_child_instance_name) {
+			$ci_count++
+		}
+	}
+	if ($ci_count < 1) {
+                $session->createInstance("$sm_child_class_name\:\:$sm_child_instance_name");
+        }
+
+	#check have we given relationship between this elements
+	my $rel = $session->get("$sm_child_class_name\:\:$sm_child_instance_name", $sm_relationship);
+	if ($rel !~ /$sm_parent_class_name\:\:$sm_parent_instance_name/) {
+		$session->put("$sm_child_class_name\:\:$sm_child_instance_name", $sm_relationship, "$sm_parent_class_name\:\:$sm_parent_instance_name");
+	}
+
+	print "OK topology updated\n";
+}
+
+
+
+
+
+

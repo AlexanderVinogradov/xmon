@@ -1,0 +1,42 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use DBI;
+
+my (
+        $ip,
+	$user,
+	$tmt,
+	$package
+);
+
+GetOptions (
+        'ip=s' => \$ip,
+        'user=s' => \$user,
+	'tmt=s' => \$tmt,
+	'package=s' => \$package
+);
+
+if (
+        $ip eq '' or
+	$user eq '' or
+	$tmt eq '' or
+	$package eq ''
+) {
+        exit 1;
+}
+
+my $tn = `ssh -o ConnectTimeout=$tmt -l $user $ip /usr/sbin/cmviewcl -v 2>/dev/null | grep $package | grep -v Service | grep up | grep running 2>/dev/null`;
+chomp($tn);
+
+
+if ($tn ne '') {
+	print STDOUT "5\n";
+	print STDERR "$package: $tn\n";
+}
+else {
+        print STDOUT "1\n";
+        print STDERR "$package: failed\n";
+}
+	

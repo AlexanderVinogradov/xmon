@@ -1,0 +1,76 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use IO::Socket;
+
+my (
+	$ip_address,
+	$ports,
+	$proto,
+	$timeout,
+	$logic
+);
+
+GetOptions (
+	'ip_address=s' => \$ip_address, 
+	'ports=s' => \$ports, 
+	'proto=s' => \$proto, 
+	'timeout=s' => \$timeout,
+	'logic=s' => \$logic
+);
+
+if (
+	$ip_address eq '' or 
+	$ports eq '' or
+	$proto eq '' or
+	$timeout eq '' or 
+	$logic eq ''
+) {
+	exit 1;
+}
+else {
+	my @port = split(",", $ports);	
+	my $pnumber = scalar(@port);
+
+	my $pok = 0;
+	foreach (@port) {
+		my $socket = IO::Socket::INET->new(
+        						PeerAddr        => $ip_address,
+                	                                PeerPort        => $_,
+                        	                        Proto           => $proto,
+                                	                Type            => SOCK_STREAM,
+							Timeout 	=> $timeout
+	        );
+
+		if ($socket) {
+			$pok++;
+			close $socket;
+		}
+	}
+
+	if ($logic eq '1') {
+		if ($pok < $pnumber) {
+			print STDOUT "1\n";
+			print STDERR "service doesn't work\n";
+		}
+		else {
+			print STDOUT "6\n";
+			print STDERR "service works fine\n";
+		}
+	}
+	elsif ($logic eq '2') {
+		if ($pok < 1) {
+                       	print STDOUT "1\n";
+			print STDERR "service doesn't work\n";
+		}
+        	else {
+                        print STDOUT "6\n";
+			print STDERR "service works fine\n";
+	        }
+	}
+	else {
+		exit 1;
+	} 
+}
+

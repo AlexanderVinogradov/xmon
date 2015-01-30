@@ -1,0 +1,73 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use IO::Socket;
+
+my (
+	$ip_address,
+	$port,
+	$proto,
+	$timeout
+);
+
+GetOptions (
+	'ip_address=s' => \$ip_address, 
+	'port=s' => \$port, 
+	'proto=s' => \$proto, 
+	'timeout=s' => \$timeout
+);
+
+if (
+	$ip_address eq '' or 
+	$port eq '' or
+	$timeout eq ''
+) {
+	exit 1;
+}
+else {
+	my $tcp_err = 0;
+	my $udp_err = 0;
+
+	my $socket_tcp = IO::Socket::INET->new(
+        					PeerAddr        => $ip_address,
+                                                PeerPort        => $port,
+                                                Proto           => 'tcp',
+                                                Type            => SOCK_STREAM,
+						Timeout 	=> $timeout
+        );
+
+	if ($socket_tcp) {
+		$tcp_err = 0;
+                close $socket_tcp;
+        }
+        else {
+        	$tcp_err = 1;
+	}
+
+	my $socket_udp = IO::Socket::INET->new(
+                                                PeerAddr        => $ip_address,
+                                                PeerPort        => $port,
+                                                Proto           => 'udp',
+                                                Type            => SOCK_STREAM,
+                                                Timeout         => $timeout
+        );
+
+	if ($socket_udp) {
+                $udp_err = 0;
+                close $socket_udp;
+        }
+        else {
+                $udp_err = 1;
+        }
+
+	if ($tcp_err eq '0' and $udp_err eq '0') {
+		print STDOUT "6\n";
+		print STDERR "connection ok\n";
+	}
+	else {
+		print STDOUT "1\n";
+		print STDERR "connection timeout\n";
+	}
+}
+

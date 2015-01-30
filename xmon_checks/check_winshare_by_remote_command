@@ -1,0 +1,35 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+
+my (
+	$ip_address,
+	$user
+);
+
+GetOptions (
+        'ip_address=s' => \$ip_address,
+        'user=s' => \$user
+);
+
+if (
+        $ip_address eq '' or
+        $user eq ''
+) {
+        exit 1;
+}
+else {
+	my $result = `ssh -l $user $ip_address \'cp -r /u10/app/oracle/UTLDIR/MIGRATE/VistXML/Thumbs.db /home/ionix/ 2>&1\' 2>&1`;
+	chomp($result);
+
+	if ($result eq '') {
+		print STDOUT "6\n";
+		print STDERR "service works fine\n";
+	} 
+	else {
+		print STDOUT "1\n";
+		print STDERR "service does not work\n";
+	}
+}
+

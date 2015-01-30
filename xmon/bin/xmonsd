@@ -1,0 +1,228 @@
+#!/usr/bin/perl
+
+$0 = "xmonsd";
+
+use strict;
+use File::Copy;
+use File::Path;
+use DBI;
+use POSIX qw(strftime);
+
+#init configuration
+open(CF, "</var/xmon/install_dir")
+        or die "Can't open /var/xmon/install_dir\n";
+my $install_dir=<CF>;
+chomp($install_dir);
+close(CF);
+my %cnf = ();
+open(C, "<$install_dir/etc/xmon.conf")
+        or die "Cant open config $install_dir/etc/xmon.conf\n";
+while(<C>) {
+        chomp;
+        if ($_ !~ /^#/ and $_ ne '') {
+                my @cp = split(" = ", $_);
+                $cnf{$cp[0]} = $cp[1];
+        }
+}
+close(C);
+our $exit_flag = 0;
+
+#start daemon sub
+sub D_Start {
+	my $d = shift;
+	if (-f "$install_dir/bin/$d") {
+		my $pcount = 0;
+		opendir(PD, "/proc")
+        		or die "Can't open /proc\n";
+	        while(my $proc = readdir(PD)) {
+        		if (-f "/proc/$proc/cmdline") {
+                		open(P, "</proc/$proc/cmdline");
+	                        my $cmdline=<P>;
+        	                chomp($cmdline);
+                	        if ($cmdline =~ /^$d/) {
+					my $t = localtime;
+					$pcount++;
+	                        }
+        	                close(P);
+                	}
+		}
+        	closedir(PD);
+		if ($pcount < 1) {
+			my $err_log = '/dev/null';
+
+			if ($ARGV[0] ne '') {
+				$err_log = $ARGV[0];
+			} 
+
+			system("$install_dir/bin/$d 1>/dev/null 2>>$err_log &");
+	                my $t = localtime;
+	                print L "$t Starting $d ...\n";
+		}
+	}
+	else {
+		my $t = localtime;
+		print L "$t Wrong params for strting $d ...\n";
+	}
+}
+
+#stop daemon sub
+sub D_Stop {
+	my $d = shift;
+	if (-f "$install_dir/bin/$d") {
+                opendir(PD, "/proc")
+                        or die "Can't open /proc\n";
+                while(my $proc = readdir(PD)) {
+                        if (-f "/proc/$proc/cmdline") {
+                                open(P, "</proc/$proc/cmdline");
+                                my $cmdline=<P>;
+                                chomp($cmdline);
+                                if ($cmdline =~ /^$d/) {
+                                        kill 9, $proc;
+					my $t = localtime;
+		                        print L "$t Stopping $d $proc ...\n";
+                                }
+                                close(P);
+                        }
+                }
+                closedir(PD);
+        }
+        else {
+		my $t = localtime;
+                print L "$t Wrong params for stoping $d...\n";
+        }
+}
+
+#set exit flag sub
+sub Set_Exit_Flag {
+	$exit_flag = 1;
+}
+
+open(L, ">>$install_dir/log/xmonsd.log")
+	or die "Can't open $install_dir/log/xmonsd.log\n";
+
+#main
+while () {
+	my @se = split(",", $cnf{scenario});
+
+	#all system stopping algo
+        $SIG{'TERM'} = 'Set_Exit_Flag';
+	if ($exit_flag eq '1') {
+		foreach (@se) {
+                        D_Stop($_);
+                }
+		exit 0;
+	}
+
+	#daemons upping algo
+	foreach (@se) {
+                D_Start($_);
+        }
+
+	#rotation algo
+	my $now_string_time = strftime "%H:%M", localtime;
+	my @time_param = split(":", $now_string_time);
+	my $now_string_date = strftime "%d%m%Y", localtime;
+
+	my @dates = ();
+	my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+	if ($dbh) {
+	        my $sth = $dbh->prepare("       
+						SELECT rdt 
+							FROM checks_rlog 
+	        ");
+        	$sth->execute();
+	        while (my $ref = $sth->fetchrow_hashref()) {
+        		push(@dates, $ref->{'rdt'});
+		}
+        	$sth->finish();
+	}
+	if ($dbh) {
+		$dbh->disconnect();
+	}
+
+	if ($dates[-1] ne $now_string_date and $time_param[0] eq $cnf{xmonsd_rotate_hour} and $time_param[1] eq $cnf{xmonsd_rotate_minute}) {
+		my @se = split(",", $cnf{scenario});
+
+		foreach (@se) {
+			D_Stop($_);
+			sleep 1;
+	        }
+
+		foreach (@se) {
+			my $t = localtime;
+			print L "$t Moving $_\n";
+			if (-f "$install_dir/log/$_\.log\.$now_string_date") {
+				unlink "$install_dir/log/$_\.log\.$now_string_date"
+        			        or die "Can't delete $install_dir/log/$_\.log\.$now_string_date\n";
+			}
+        	        copy("$install_dir/log/$_\.log", "$install_dir/log/$_\.log\.$now_string_date")
+                		or die "Can't copy $install_dir/log/$_\.log to $install_dir/log/$_\.log\.$now_string_date\n";
+			unlink "$install_dir/log/$_\.log"
+				or die "Can't delete $install_dir/log/$_\.log\n";
+		}
+
+		my $t = localtime;
+		print L "$t Moving table\n";
+		my $tcount = 0;
+		my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+		if ($dbh) {
+			my $sth = $dbh->prepare("       
+        						SHOW TABLES
+			");
+	        	$sth->execute();
+		        while (my $ref = $sth->fetchrow_arrayref()) {
+				if ($ref->[0] eq "checks_log_$now_string_date") {
+	        			$tcount++;
+				}
+			}
+	        	$sth->finish();
+		}
+		if ($dbh) {
+			$dbh->disconnect();
+		}
+		if ($tcount > 0) {
+			my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+			if ($dbh) {
+		        	$dbh->do("DROP TABLE checks_log_$now_string_date");
+			}
+			if ($dbh) {
+				$dbh->disconnect();
+			}
+		}
+		my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+		if ($dbh) {
+	        	$dbh->do("RENAME TABLE checks_log TO checks_log_$now_string_date");
+		        open(F, "$install_dir/share/sql/checks_log\.sql")
+			        or die "Can't open $install_dir/share/sql/checks_log\.sql\n";
+		        my @query = <F>;
+        		close(F);
+	        	$dbh->do("@query");
+		}
+		if ($dbh) {
+			$dbh->disconnect();
+		}
+
+		foreach (@se) {
+        	        D_Start($_);
+		}
+
+		my $dbh = DBI->connect("DBI:mysql:database=$cnf{db_name};host=$cnf{db_host};port=$cnf{db_port}", $cnf{db_user}, $cnf{db_pass});
+                if ($dbh) {
+			my $tm = time;
+                        $dbh->do("
+					INSERT INTO checks_rlog VALUES(\'$now_string_date\',\'rotation completed\',\'$tm\')
+			");
+                }
+                if ($dbh) {
+                        $dbh->disconnect();
+                }
+
+		my $t = localtime;
+		print L "$t Rotation for $now_string_date completed\n";
+	}
+
+	sleep $cnf{xmonsd_sleep_interval};
+}
+
+close(L);
+

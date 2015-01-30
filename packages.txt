@@ -1,0 +1,14 @@
+mysql
+mysql-server
+MySQL-shared-compat
+perl-DBD-MySQL
+perl-DBI
+perl-IO-Interface
+perl-IPC-Cmd
+perl-Locale-Maketext-Simple
+perl-Module-Load
+perl-Module-Load-Conditional
+perl-Parallel-ForkManager
+perl-Params-Check
+perl-Proc-Daemon
+perl-version

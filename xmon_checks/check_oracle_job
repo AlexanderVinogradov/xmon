@@ -1,0 +1,85 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use DBI;
+
+my (
+        $check_id,
+	$db_host,
+	$db_port,
+	$db_name,
+	$db_user,
+	$db_pass,
+	$usr,
+        $pass,
+        $ip,
+        $inst
+);
+
+GetOptions (
+        'check_id=s' => \$check_id,
+	'db_host=s' => \$db_host,
+	'db_port=s' => \$db_port,
+	'db_name=s' => \$db_name,
+	'db_user=s' => \$db_user,
+	'db_pass=s' => \$db_pass,
+        'pass=s' => \$pass,
+        'usr=s' => \$usr,
+        'ip=s' => \$ip,
+        'inst=s' => \$inst
+);
+
+if (
+        $check_id eq '' or
+	$db_host eq '' or
+	$db_port eq '' or
+	$db_name eq '' or
+	$db_user eq '' or
+	$db_pass eq '' or
+        $usr eq '' or
+        $pass eq '' or
+        $ip eq '' or
+        $inst eq ''
+) {
+        exit 1;
+}
+
+#take current ip from cluster check
+my $dbh = DBI->connect("DBI:mysql:database=$db_name;host=$db_host;port=$db_port", $db_user, $db_pass);
+my $current_data = '';
+my $sth = $dbh->prepare("       
+				SELECT current_data
+					FROM checks_status 
+						WHERE id=$check_id
+");
+$sth->execute();
+while (my $ref = $sth->fetchrow_hashref()) {
+	$current_data = $ref->{'current_data'};
+}
+$sth->finish();
+$dbh->disconnect();
+
+my @ts = `export LD_LIBRARY_PATH="/root/instantclient/instantclient_11_2" && /root/instantclient/instantclient_11_2/sqlplus $usr/$pass@//$ip/$inst <<EOF
+select (case when exists(select * from dba_jobs_running where job=262) then 1 else (case when (next_date>=sysdate and next_date<>TO_DATE('01.01.4000','dd.mm.rrrr') and broken='N') then 0 else 1 end) end) fl_active from dba_jobs t where job=262;
+EOF`;
+
+my $t = '';
+foreach (@ts) {
+	if ($_ !~ /SQL\*Plus/ and $_ !~ // and $_ !~ /Copyright/ and $_ !~ // and $_ !~ /Connected to/ and $_ !~ /Oracle Database/ and $_ !~ /With the Partitioning/ and $_ !~ /SQL>/ and $_ =~ /[0-9]/){
+		$_ =~ s/ //g;
+		$_ =~ s/\t//g;
+		chomp;
+		$t = $_;
+	}
+}
+
+if ($t ne '0') {
+	print STDOUT "1\n";
+	print STDERR "OracleDB instance $inst FAILED for JOB CHECK query $current_data\n";
+}
+else {
+	print STDOUT "5\n";
+        print STDERR "OracleDB instance $inst OK for JOB CHECK query $current_data\n";
+}
+

@@ -1,0 +1,56 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use DBI;
+
+my (
+        $ips,
+	$user,
+	$tmt,
+	$package,
+);
+
+GetOptions (
+        'ips=s' => \$ips,
+        'user=s' => \$user,
+	'tmt=s' => \$tmt,
+	'package=s' => \$package,
+);
+
+if (
+        $ips eq '' or
+	$user eq '' or
+	$tmt eq '' or
+	$package eq ''
+) {
+        exit 1;
+}
+
+my @hosts = split(",", $ips);
+
+my $act = '';
+foreach (@hosts) {
+	my $me = `ssh -o ConnectTimeout=$tmt -l $user $_ hostname 2>/dev/null`;
+	chomp($me);
+
+	my $tn = `ssh -o ConnectTimeout=$tmt -l $user $_ /usr/sbin/cmviewcl -v | grep $package | grep -v Service 2>/dev/null`;
+	chomp($tn);
+	my @rnp = split(" ", $tn);
+
+	if ($me eq $rnp[-1]) {
+		$act = $_;
+	} 
+}
+
+my $hl = "$act,";
+foreach (@hosts) {
+	if ($_ ne $act) {
+		$hl = $hl . "$_,";
+	}
+}
+$hl =~ s/,$//;
+
+print STDOUT "6\n";
+print STDERR "$hl\n";
+

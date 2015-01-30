@@ -1,0 +1,9 @@
+CREATE TABLE `checks_status` (
+  `id` int(11) NOT NULL,
+  `current_severity` int(11) NOT NULL,
+  `current_data` varchar(1000) NOT NULL,
+  `current_check_time` int(11) NOT NULL,
+  `current_action_answer` varchar(1000) NOT NULL,
+  `current_action_time` int(11) NOT NULL,
+  UNIQUE KEY `id` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8

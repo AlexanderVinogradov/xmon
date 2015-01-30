@@ -1,0 +1,119 @@
+#!/usr/bin/perl
+
+use strict;
+
+use lib '/opt/ionix_api_lib';
+#use lib '/opt/InCharge/SAM/smarts/perl/5.8.8';
+use InCharge::session;
+
+my $domain_manager = 'INCHARGE-SA'; 
+my $broker = '10.30.16.160'; 
+my $username = 'admin';
+my $password = 'changeme';
+
+my $session = InCharge::session->new(
+					broker=>"$broker",
+					domain=>"$domain_manager",
+					username=>"$username",
+					password=>"$password",
+					traceServer => 1,
+					locale=>"en_US"
+);
+
+my @bps = ("BP-billing_database","BP-database_clustering","BP-database_commutation","BP-database_storage","BP-database_storage_commutation","BP-firewall_access","BP-integration_platform","BP-tomcat_clustering","BP-tomcat_comutation");
+
+foreach (@bps) {
+	chomp;
+	my $obj = $session->object("BusinessProcess::$_");
+	my @elems = $obj->get("ConsistsOf");
+	my $elems_count = scalar(@elems);		
+	my $rn = $obj->get("DisplayName");
+
+	my $evented_hosts = 0;
+	foreach my $el (@elems) {
+		chomp($el);
+		my $obj_e = $session->object("$el");
+		my @notifs = $obj_e->get("Notifications");
+	
+		my $active_events = 0;
+		foreach my $nf (@notifs) {
+			chomp($nf);
+			my $obj_n = $session->object("$nf");
+			my $state = $obj_n->get("EventState");
+			chomp($state);
+			if ($state eq 'ACTIVE') {
+				$active_events++;	
+			}
+		}
+
+		if ($active_events > 0) {
+			$evented_hosts++;
+		}
+	}
+
+	if ($evented_hosts == $elems_count) {
+		my $element;
+                my $elemObj = $session->object("BusinessProcess", $_);
+
+                if (!$elemObj->isNull()) {
+	                $element = $elemObj;
+                }
+
+                my $icsNotificationFactory = $session->object($session->getInstances("ICS_NotificationFactory"));
+                my $eventObj = $icsNotificationFactory->makeNotification("BusinessProcess", $rn, "Damaged");
+                $eventObj = $session->object($eventObj);
+                if (!$eventObj->isNull()) {
+	                $eventObj->{EventText} = "This is a critical problem for this business process";
+                        $eventObj->{Severity} = 1;
+                        $eventObj->{ClearOnAcknowledge} = 1;
+                        $eventObj->{EventType} = "DURABLE";
+                        $eventObj->{OccurredOn} = $_;
+                        $eventObj->{SourceEventType} = "EVENT";
+
+                        my @arr = ("xmon", "xmon", "Event has created by xmon", 0, 0);
+                        $session->invoke($eventObj, "notify", @arr);
+                        $eventObj->changed(time);
+                }
+	}
+	elsif ($evented_hosts < $elems_count and $evented_hosts != 0) {
+		my $element;
+	        my $elemObj = $session->object("BusinessProcess", $_);
+
+		if (!$elemObj->isNull()) {
+			$element = $elemObj;
+		}
+
+		my $icsNotificationFactory = $session->object($session->getInstances("ICS_NotificationFactory"));
+		my $eventObj = $icsNotificationFactory->makeNotification("BusinessProcess", $rn, "Damaged");
+		$eventObj = $session->object($eventObj);
+		if (!$eventObj->isNull()) {
+	                $eventObj->{EventText} = "This is a minor problem for this business process";
+       		        $eventObj->{Severity} = 3;
+	               	$eventObj->{ClearOnAcknowledge} = 1;
+        	        $eventObj->{EventType} = "DURABLE";
+	       	        $eventObj->{OccurredOn} = $_;
+        	        $eventObj->{SourceEventType} = "EVENT";
+
+	       	        my @arr = ("xmon", "xmon", "Event has created by xmon", 0, 0);
+        		$session->invoke($eventObj, "notify", @arr);
+	                $eventObj->changed(time);
+       		}
+	}
+	else {
+	       	my $icsNotificationFactory = $session->object($session->getInstances("ICS_NotificationFactory"));
+               	my $eventObj = $icsNotificationFactory->findNotification("BusinessProcess", $rn, "Damaged");
+	       	if ($eventObj ne '') {
+			$eventObj = $session->object($eventObj);
+			if (!$eventObj->isNull()) {
+                       		if ($eventObj->{EventState} eq "ACTIVE") {
+                               		my @arrClear = ("xmon", "xmon", "Event has closed by xmon");
+	                               	$session->invoke($eventObj, "clear", @arrClear);
+                                	$eventObj->changed(time);
+               	        	}
+	               	}
+	       }
+       	}
+}
+
+print STDOUT "Actions done\n";
+
